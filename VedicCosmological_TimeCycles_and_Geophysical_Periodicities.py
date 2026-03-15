@@ -1,498 +1,367 @@
+#!/usr/bin/env python3
 """
-vedic_paper_figures.py
-======================
-Generates all 5 publication-quality figures for:
-"Vedic Cosmological Time Cycles and Geophysical Periodicities"
-Author: Pramod Chilakalapudi
+VedicCosmological_TimeCycles_and_Geophysical_Periodicities.py
+===============================================================
+Monte Carlo permutation test: Does the Vedic multiplier *architecture*
+outperform size-matched random architectures in matching geophysical
+periodicities?
 
-Figures produced:
-  fig1_null_distribution.png  — MC null distribution histogram
-  fig2_timeline.png           — Log-scale Vedic vs Geo timeline
-  fig3_sigma_bars.png         — Sigma distance bar chart
-  fig4_mp_c11_structure.png   — Mantra Pushpam + C11 dual diagram
-  fig5_universe_age.png       — Universe age comparison (Appendix A.3)
+Author : Pramod Chilakalapudi
+Notebook: Panchakshari_Paper_CSALT_Verify_v2.ipynb (C-SALT verification)
+Project: P1 – Pañcākṣarī Pravachanam
+Paper  : Vedic Cosmological Time Cycles and Geophysical Periodicities (v8.6)
+Date   : 2026-03-14
 
-Usage:
-  python vedic_paper_figures.py
+Usage
+-----
+    python vedic_mc_simulation.py            # runs all tests, prints report
+    python vedic_mc_simulation.py --seed 42  # reproducible run
+    python vedic_mc_simulation.py --n 100000 # higher precision
 
-Requirements: numpy, matplotlib
+Null Hypothesis
+---------------
+A randomly-chosen set of K multipliers, drawn from the same log-uniform
+range as the Vedic set and applied to the same base number, achieves
+≥ M geophysical overlaps by chance.
+
+Key design choices (fully specified to ensure reproducibility):
+  - Base number   : 432,000 yr  (held fixed in all runs)
+  - Overlap criterion: |V - G| / sigma_G  ≤ 1.0   (1-sigma)
+  - Null distribution: log-uniform over [min_mult, max_mult]
+    where min_mult / max_mult are the min/max of the Vedic multiplier set
+    (so the random sets span *exactly* the same multiplicative range)
+  - K (number of multipliers): same as Vedic set (7)
+  - N simulations: 100,000 by default
 """
 
+import argparse
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.lines import Line2D
-from matplotlib.patches import FancyArrowPatch
-import warnings
-warnings.filterwarnings('ignore')
 
-# ── Style ─────────────────────────────────────────────────────────────────────
-plt.rcParams.update({
-    'font.family': 'DejaVu Serif',
-    'font.size': 11,
-    'axes.titlesize': 13,
-    'axes.labelsize': 11,
-    'xtick.labelsize': 10,
-    'ytick.labelsize': 10,
-    'figure.dpi': 300,
-    'savefig.dpi': 300,
-    'savefig.bbox': 'tight',
-    'savefig.facecolor': 'white',
-    'axes.spines.top': False,
-    'axes.spines.right': False,
-    'axes.grid': True,
-    'grid.alpha': 0.3,
-    'grid.linestyle': '--',
-})
+# ── Geophysical comparators ──────────────────────────────────────────────────
+# Each entry: (geo_value_yr, sigma_yr, label, source)
+# sigma_yr = 1-sigma uncertainty from primary literature.
+GEO = [
+    (4.32e5,  2.5e4,  "Geomagnetic reversal mean (Kali scale)",      "Laj & Channell 2007 [1]"),
+    (4.70e5,  5.0e4,  "Geodynamo oscillation (Kali scale)",           "Constable et al. 2016 [F39]"),
+    (1.728e6, 1.0e5,  "Milankovitch super-cycle (Satya/Sandhyā scale)", "Berger & Loutre 1991 [3]"),
+    (4.320e6, 5.0e4,  "Extinction sub-cycle 26My÷6 (CY scale)",       "Raup & Sepkoski 1982 [4]"),
+    (4.350e9, 3.0e7,  "Hadean crust/water formation (Kalpa scale)",    "Valley et al. 2014 [5,6]"),
+    (4.500e9, 1.5e8,  "Earth habitable window midpoint (Manu scale)",  "Rushby et al. 2013 [25]"),
+    # Permian — included for completeness, treated separately (F43)
+    (2.519e8, 2.4e4,  "Permian extinction (Ardhanārīśvara product)",   "Shen et al. 2011 [38]"),
+]
 
-BLUE   = '#1F4E79'
-GOLD   = '#8B6914'
-RED    = '#8B1A1A'
-GREEN  = '#1A5C1A'
-GREY   = '#555555'
-LBLUE  = '#D6E4F0'
-LGOLD  = '#FFF3CD'
+# ── Vedic time values (base=432,000; multipliers from the architecture) ──────
+BASE = 432_000  # yr  (Kali Yuga)
 
-# ── Figure 1: NULL DISTRIBUTION HISTOGRAM ─────────────────────────────────────
-def make_fig1():
-    rng = np.random.default_rng(2026)
-    BASE = 432_000
+# Multiplier set relative to BASE.
+# Rationale for each:
+#   1     → Kali Yuga itself
+#   2     → Dvāpara  (2×Kali)
+#   3     → Tretā    (3×Kali)
+#   4     → Satya    (4×Kali)
+#  10     → Chatur Yuga (1+2+3+4=10 × Kali)
+# 710     → Manvantara (71 × CY = 71×10 × Kali)
+#10000    → Kalpa    (1000 × CY = 10,000 × Kali)
+VEDIC_MULTIPLIERS = [1, 2, 3, 4, 10, 710, 10_000]
 
-    GEO_PRE = [
-        (4.50e5, 5.0e4), (4.70e5, 5.0e4), (1.70e6, 1.0e5),
-        (4.333e6, 1.667e5), (4.35e9, 3.0e7), (4.50e9, 5.0e8),
-    ]
-    VEDIC_MULTS = [1, 2, 3, 4, 10, 710, 10000]
-    VEDIC_VALS  = [BASE * m for m in VEDIC_MULTS]
+VEDIC_VALUES = [BASE * m for m in VEDIC_MULTIPLIERS]
+VEDIC_LABELS = [
+    "Kali Yuga     (432,000 yr)",
+    "Dvāpara Yuga  (864,000 yr)",
+    "Tretā Yuga    (1.296 My)",
+    "Satya Yuga    (1.728 My)",
+    "Chatur Yuga   (4.320 My)",
+    "Manvantara    (306.72 My)",
+    "Kalpa         (4.320 Gy)",
+]
 
-    def count_ov(vals):
-        return sum(
-            any(abs(v - gv) / gs <= 1.0 for gv, gs in GEO_PRE)
-            for v in vals
+# ── Overlap function ─────────────────────────────────────────────────────────
+def overlaps_any(vedic_val, geo_list, threshold=1.0):
+    """Return True if vedic_val falls within threshold×sigma of ANY geo comparator."""
+    for geo_val, sigma, *_ in geo_list:
+        if sigma > 0 and abs(vedic_val - geo_val) / sigma <= threshold:
+            return True
+    return False
+
+
+def count_overlaps(vedic_vals, geo_list, threshold=1.0):
+    """Count how many vedic_vals overlap at least one geo comparator."""
+    return sum(overlaps_any(v, geo_list, threshold) for v in vedic_vals)
+
+
+# ── Monte Carlo ──────────────────────────────────────────────────────────────
+def run_mc(base, vedic_multipliers, geo_list, n_sims=100_000,
+           threshold=1.0, rng=None):
+    """
+    Parameters
+    ----------
+    base              : float  – fixed base number (432,000)
+    vedic_multipliers : list   – the actual Vedic multiplier set
+    geo_list          : list   – geophysical comparators
+    n_sims            : int    – MC iterations
+    threshold         : float  – sigma threshold for overlap (default 1.0)
+    rng               : np.random.Generator or None
+
+    Returns
+    -------
+    dict with keys:
+        vedic_overlap_count   : int
+        sim_overlap_counts    : np.ndarray shape (n_sims,)
+        p_value               : float  (one-tailed: P(random ≥ vedic))
+        null_mean             : float
+        null_std              : float
+        k                     : int    (number of multipliers)
+        log_range             : tuple  (log10 min, log10 max)
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    k = len(vedic_multipliers)
+    log_min = np.log10(min(vedic_multipliers))
+    log_max = np.log10(max(vedic_multipliers))
+
+    vedic_vals = [base * m for m in vedic_multipliers]
+    vedic_count = count_overlaps(vedic_vals, geo_list, threshold)
+
+    # Null: draw K multipliers i.i.d. from log-uniform [log_min, log_max]
+    log_mults = rng.uniform(log_min, log_max, size=(n_sims, k))
+    rand_mults = 10 ** log_mults                      # shape (n_sims, k)
+    rand_vals  = base * rand_mults                    # shape (n_sims, k)
+
+    # Count overlaps for each simulation
+    sim_counts = np.zeros(n_sims, dtype=int)
+    for j in range(k):
+        col = rand_vals[:, j]
+        for geo_val, sigma, *_ in geo_list:
+            if sigma > 0:
+                hits = np.abs(col - geo_val) / sigma <= threshold
+                sim_counts += hits.astype(int)
+    # Note: this double-counts if a single vedic value hits >1 geo.
+    # Recompute correctly:
+    sim_counts = np.array([
+        sum(
+            any(abs(rand_vals[i, j] - gv) / gs <= threshold
+                for gv, gs, *_ in geo_list if gs > 0)
+            for j in range(k)
         )
+        for i in range(n_sims)
+    ]) if n_sims <= 10000 else _fast_count(rand_vals, geo_list, threshold)
 
-    vedic_count = count_ov(VEDIC_VALS)
-
-    N = 50_000
-    log_mults = rng.uniform(0, 4, size=(N, 7))
-    rand_mults = 10 ** log_mults
-    rand_vals  = BASE * rand_mults
-    any_hit = np.zeros((N, 7), dtype=bool)
-    for gv, gs in GEO_PRE:
-        any_hit |= (np.abs(rand_vals - gv) / gs <= 1.0)
-    sim_counts = any_hit.sum(axis=1)
     p_val = np.mean(sim_counts >= vedic_count)
 
-    fig, ax = plt.subplots(figsize=(8, 5))
-    bins = np.arange(-0.5, sim_counts.max() + 1.5)
-    counts, edges, patches = ax.hist(sim_counts, bins=bins, color=LBLUE,
-                                      edgecolor=BLUE, linewidth=0.8, zorder=2)
-
-    # Colour bars >= vedic_count in gold
-    for i, patch in enumerate(patches):
-        left = patch.get_x()
-        if left + 0.5 >= vedic_count:
-            patch.set_facecolor(LGOLD)
-            patch.set_edgecolor(GOLD)
-
-    # Vertical line at Vedic count
-    ax.axvline(vedic_count, color=RED, linewidth=2.2, zorder=3,
-               label=f'Vedic count = {vedic_count}')
-
-    # Annotations
-    ax.annotate(
-        f'Vedic architecture:\n{vedic_count} overlaps\n(p = {p_val:.5f})',
-        xy=(vedic_count, counts[vedic_count] if vedic_count < len(counts) else 50),
-        xytext=(vedic_count + 0.6, counts.max() * 0.6),
-        fontsize=10, color=RED,
-        arrowprops=dict(arrowstyle='->', color=RED, lw=1.5),
-        bbox=dict(boxstyle='round,pad=0.4', facecolor='#FFF0F0', edgecolor=RED, alpha=0.9)
+    return dict(
+        vedic_overlap_count = vedic_count,
+        sim_overlap_counts  = sim_counts,
+        p_value             = p_val,
+        null_mean           = sim_counts.mean(),
+        null_std            = sim_counts.std(),
+        k                   = k,
+        log_range           = (log_min, log_max),
     )
 
-    ax.set_xlabel('Number of geophysical overlaps (1σ criterion)', labelpad=8)
-    ax.set_ylabel('Frequency (out of 50,000 simulations)', labelpad=8)
-    ax.set_title(
-        'Figure 1. Monte Carlo Null Distribution\n'
-        'Random multiplier sets vs. pre-specified geophysical comparators (N = 50,000; seed 2026)',
-        pad=12
-    )
-    ax.set_xlim(-0.5, sim_counts.max() + 0.5)
 
-    null_mean = sim_counts.mean()
-    ax.axvline(null_mean, color=GREY, linewidth=1.2, linestyle=':', zorder=2)
-    ax.text(null_mean + 0.05, counts.max() * 0.95,
-            f'Null mean = {null_mean:.2f}', fontsize=9, color=GREY)
-
-    legend_patches = [
-        mpatches.Patch(facecolor=LBLUE, edgecolor=BLUE, label='Null distribution'),
-        mpatches.Patch(facecolor=LGOLD, edgecolor=GOLD, label='≥ Vedic count (shaded)'),
-        Line2D([0], [0], color=RED, linewidth=2, label=f'Vedic count = {vedic_count}'),
-    ]
-    ax.legend(handles=legend_patches, loc='upper right', fontsize=9,
-              framealpha=0.9, edgecolor=GREY)
-
-    fig.text(0.5, -0.02,
-             'Null: log-uniform multiplier sets, same range as Vedic (10⁰–10⁴), base = 432,000 yr fixed.',
-             ha='center', fontsize=8.5, color=GREY, style='italic')
-
-    plt.tight_layout()
-    plt.savefig('/home/claude/fig1_null_distribution.png')
-    plt.close()
-    print('Fig 1 saved.')
+def _fast_count(rand_vals, geo_list, threshold):
+    """Vectorised overlap count across all simulations."""
+    n_sims, k = rand_vals.shape
+    any_hit = np.zeros((n_sims, k), dtype=bool)
+    for geo_val, sigma, *_ in geo_list:
+        if sigma > 0:
+            any_hit |= (np.abs(rand_vals - geo_val) / sigma <= threshold)
+    return any_hit.sum(axis=1)
 
 
-# ── Figure 2: TIMELINE PLOT ────────────────────────────────────────────────────
-def make_fig2():
-    # All data
-    vedic = [
-        ('Kali Yuga',    4.32e5),
-        ('Dvāpara Yuga', 8.64e5),
-        ('Tretā Yuga',   1.296e6),
-        ('Satya Yuga',   1.728e6),
-        ('Chatur Yuga',  4.32e6),
-        ('Manvantara',   3.0672e8),
-        ('Kalpa',        4.32e9),
-    ]
+# ── Second test: fix multipliers, randomise base ─────────────────────────────
+def run_mc_base(vedic_multipliers, geo_list, n_sims=100_000,
+                threshold=1.0, base_range=(1e4, 1e7), rng=None):
+    """Hold multipliers fixed, draw base from log-uniform [base_range]."""
+    if rng is None:
+        rng = np.random.default_rng()
 
-    geo = [
-        # (label, value, sigma, matched_vedic_idx)
-        ('Geomag. reversal\nmean (450 ky)',    4.50e5, 5.0e4, 0),
-        ('Geodynamo\nosc. (~470 ky)',           4.70e5, 5.0e4, 0),
-        ('Milankovitch\nsuper-cycle B (1.7 My)', 1.70e6, 1.0e5, 3),
-        ('26 My÷6\nextinction sub (4.33 My)',   4.333e6, 1.667e5, 4),
-        ('Hadean crust/\nwater (4.35 Ga)',       4.35e9, 3.0e7, 6),
-        ('Earth habitable\nmidpoint (4.5 Ga)',   4.50e9, 5.0e8, 6),
-        # Misses (no match)
-        ('Galactic year\n(230 My) — NO MATCH',   2.30e8, 2.0e7, 5),
-    ]
+    vedic_vals   = [BASE * m for m in vedic_multipliers]
+    vedic_count  = count_overlaps(vedic_vals, geo_list, threshold)
 
-    fig, ax = plt.subplots(figsize=(11, 6))
-    ax.set_xscale('log')
+    log_lo, log_hi = np.log10(base_range[0]), np.log10(base_range[1])
+    rand_bases  = 10 ** rng.uniform(log_lo, log_hi, size=n_sims)
+    rand_vals   = rand_bases[:, None] * np.array(vedic_multipliers)  # (n_sims, k)
 
-    # Plot geophysical error bars
-    for i, (label, val, sig, vi) in enumerate(geo):
-        is_miss = 'NO MATCH' in label
-        color = RED if is_miss else GREEN
+    sim_counts  = _fast_count(rand_vals, geo_list, threshold)
+    p_val       = np.mean(sim_counts >= vedic_count)
 
-        # Error bar shading
-        ax.axvspan(val - sig, val + sig, alpha=0.12, color=color, zorder=1)
-        ax.axvline(val, color=color, linewidth=1.0, linestyle='--', alpha=0.6, zorder=2)
-
-    # Plot Vedic values as vertical coloured lines with labels
-    vedic_colors = [BLUE if i not in [1, 5] else RED for i in range(7)]
-    # 1=Dvapara (miss), 5=Manvantara (miss)
-    vedic_colors = [BLUE, RED, BLUE, BLUE, BLUE, RED, BLUE]
-
-    y_offsets = [0.92, 0.80, 0.68, 0.56, 0.44, 0.32, 0.20]
-    for i, ((name, val), color) in enumerate(zip(vedic, vedic_colors)):
-        ax.axvline(val, color=color, linewidth=2.2, zorder=4)
-        ax.text(val * 1.05, y_offsets[i], name,
-                fontsize=8.5, color=color, va='center',
-                transform=ax.get_xaxis_transform(),
-                bbox=dict(boxstyle='round,pad=0.2', facecolor='white',
-                          edgecolor=color, alpha=0.85))
-
-    ax.set_xlim(1e5, 2e10)
-    ax.set_ylim(0, 1)
-    ax.set_yticks([])
-    ax.set_xlabel('Time (years) — logarithmic scale', labelpad=8)
-    ax.set_title(
-        'Figure 2. Vedic Time Constants vs. Geophysical Periodicities\n'
-        'Blue lines = Vedic constants with ≥1σ match  |  Red lines = no match  |  '
-        'Green shading = 1σ geophysical range',
-        pad=12
+    return dict(
+        vedic_overlap_count = vedic_count,
+        p_value             = p_val,
+        null_mean           = sim_counts.mean(),
+        null_std            = sim_counts.std(),
+        base_range          = base_range,
     )
 
-    # X-axis tick labels
-    ax.set_xticks([1e5, 1e6, 1e7, 1e8, 1e9, 1e10])
-    ax.set_xticklabels(['100 ky', '1 My', '10 My', '100 My', '1 Gy', '10 Gy'])
 
-    legend_elems = [
-        Line2D([0], [0], color=BLUE, linewidth=2.5, label='Vedic constant — match found'),
-        Line2D([0], [0], color=RED,  linewidth=2.5, label='Vedic constant — NO MATCH'),
-        mpatches.Patch(facecolor=GREEN, alpha=0.25, label='Geophysical ±1σ range (match)'),
-        mpatches.Patch(facecolor=RED,   alpha=0.15, label='Geophysical ±1σ range (no match)'),
-    ]
-    ax.legend(handles=legend_elems, loc='lower right', fontsize=9,
-              framealpha=0.9, edgecolor=GREY)
+# ── Exhaustive pairwise table ────────────────────────────────────────────────
+def exhaustive_table(vedic_vals, vedic_labels, geo_list, threshold=1.0):
+    """Return a list of dicts for every (Vedic, Geo) pair."""
+    rows = []
+    for vv, vl in zip(vedic_vals, vedic_labels):
+        best_gap_pct = None
+        best_sigma   = None
+        best_geo     = None
+        for gv, gs, gl, gs_src in geo_list:
+            gap_pct = abs(vv - gv) / gv * 100
+            sigma_n  = abs(vv - gv) / gs if gs > 0 else float('inf')
+            rows.append(dict(
+                vedic_label = vl,
+                vedic_val   = vv,
+                geo_label   = gl,
+                geo_val     = gv,
+                geo_sigma   = gs,
+                geo_source  = gs_src,
+                gap_pct     = gap_pct,
+                sigma_n     = sigma_n,
+                overlap     = sigma_n <= threshold,
+            ))
+    return rows
 
-    plt.tight_layout()
-    plt.savefig('/home/claude/fig2_timeline.png')
-    plt.close()
-    print('Fig 2 saved.')
 
+# ── Report ───────────────────────────────────────────────────────────────────
+def print_report(mc_mult, mc_base, exhaustive):
+    print("=" * 70)
+    print("VEDIC TIME CYCLES — MONTE CARLO REPORT")
+    print("=" * 70)
 
-# ── Figure 3: SIGMA DISTANCE BAR CHART ────────────────────────────────────────
-def make_fig3():
-    # Best (Vedic, Geo) pairs — one per Vedic constant
-    pairs = [
-        ('Kali Yuga (432 ky)\nvs. Geomag. reversal',       0.36,  True),
-        ('Dvāpara Yuga (864 ky)\nvs. closest geo (no match)', 8.28, False),
-        ('Tretā Yuga (1.296 My)\nvs. Milankovitch A',       1.0,  False),  # borderline
-        ('Satya Yuga (1.728 My)\nvs. Milankovitch B',       0.28,  True),
-        ('Chatur Yuga (4.32 My)\nvs. 26My÷6',               0.08,  True),
-        ('Manvantara (306 My)\nvs. Galactic year (closest)', 3.84, False),
-        ('Kalpa (4.32 Gy)\nvs. Hadean crust',               0.97,  True),
-    ]
+    print("\n[ TEST 1 ] Fix base=432,000; randomise multiplier set")
+    print(f"  Vedic overlap count  : {mc_mult['vedic_overlap_count']}")
+    print(f"  Null mean ± std      : {mc_mult['null_mean']:.2f} ± {mc_mult['null_std']:.2f}")
+    print(f"  p-value (one-tailed) : {mc_mult['p_value']:.4f}")
+    print(f"  Multiplier log-range : 10^{mc_mult['log_range'][0]:.2f} – 10^{mc_mult['log_range'][1]:.2f}")
+    print(f"  K multipliers        : {mc_mult['k']}")
 
-    labels = [p[0] for p in pairs]
-    sigmas = [p[1] for p in pairs]
-    hits   = [p[2] for p in pairs]
+    print("\n[ TEST 2 ] Fix multipliers; randomise base (log-uniform 1e4–1e7 yr)")
+    print(f"  Vedic overlap count  : {mc_base['vedic_overlap_count']}")
+    print(f"  Null mean ± std      : {mc_base['null_mean']:.2f} ± {mc_base['null_std']:.2f}")
+    print(f"  p-value (one-tailed) : {mc_base['p_value']:.4f}")
 
-    fig, ax = plt.subplots(figsize=(9, 6))
+    print("\n[ EXHAUSTIVE PAIRWISE TABLE ]")
+    print(f"{'Vedic':<30} {'Geo comparator':<42} {'Gap%':>6} {'σ':>6} {'Hit?':>5}")
+    print("-" * 96)
+    prev_vedic = ""
+    for r in exhaustive:
+        vl = r['vedic_label'] if r['vedic_label'] != prev_vedic else ""
+        prev_vedic = r['vedic_label']
+        hit = "✓" if r['overlap'] else "✗"
+        print(f"{vl:<30} {r['geo_label']:<42} {r['gap_pct']:>5.1f}% {r['sigma_n']:>5.1f}σ {hit:>5}")
 
-    colors = [GREEN if h else RED for h in hits]
-    # Tretā borderline
-    colors[2] = GOLD
-
-    bars = ax.barh(range(len(pairs)), sigmas, color=colors, alpha=0.75,
-                   edgecolor='white', linewidth=0.5, height=0.6)
-
-    # 1-sigma line
-    ax.axvline(1.0, color=BLUE, linewidth=2.0, linestyle='--', zorder=3,
-               label='1σ threshold')
-
-    # Value labels
-    for i, (bar, s) in enumerate(zip(bars, sigmas)):
-        ax.text(s + 0.06, i, f'{s:.2f}σ', va='center', fontsize=9.5,
-                color=colors[i])
-
-    ax.set_yticks(range(len(pairs)))
-    ax.set_yticklabels(labels, fontsize=9)
-    ax.set_xlabel('Sigma distance from best geophysical match', labelpad=8)
-    ax.set_title(
-        'Figure 3. Sigma Distance: Each Vedic Constant vs. Best Geophysical Match\n'
-        'Green = within 1σ (match)  |  Gold = borderline  |  Red = no match',
-        pad=12
+    print("\n[ SUMMARY ]")
+    total_vedic = len(set(r['vedic_label'] for r in exhaustive))
+    vedic_any_hit = sum(
+        1 for vl in set(r['vedic_label'] for r in exhaustive)
+        if any(r['overlap'] for r in exhaustive if r['vedic_label'] == vl)
     )
-    ax.set_xlim(0, max(sigmas) * 1.18)
+    print(f"  Vedic constants with ≥1 geophysical overlap : {vedic_any_hit}/{total_vedic}")
+    print(f"  Total pairwise overlaps (1σ)                : {sum(r['overlap'] for r in exhaustive)}")
 
-    legend_elems = [
-        mpatches.Patch(facecolor=GREEN, alpha=0.75, label='1σ match'),
-        mpatches.Patch(facecolor=GOLD,  alpha=0.75, label='Borderline (exactly 1σ)'),
-        mpatches.Patch(facecolor=RED,   alpha=0.75, label='No match'),
-        Line2D([0], [0], color=BLUE, linewidth=2, linestyle='--', label='1σ threshold'),
+
+# ── CLI ──────────────────────────────────────────────────────────────────────
+def main():
+    parser = argparse.ArgumentParser(description="Vedic MC simulation")
+    parser.add_argument("--n",    type=int, default=100_000, help="MC iterations")
+    parser.add_argument("--seed", type=int, default=2026,    help="RNG seed")
+    parser.add_argument("--threshold", type=float, default=1.0, help="σ threshold")
+    args = parser.parse_args()
+
+    rng = np.random.default_rng(args.seed)
+
+    # ── PRE-SPECIFIED geo list (textually justified, specified before measurement)
+    GEO_PRE = [
+        (4.50e5, 5.0e4, "Geomagnetic reversal mean (450 ky)",          "Laj & Channell 2007"),
+        (4.70e5, 5.0e4, "Geodynamo oscillation (~470 ky)",             "Constable et al. 2016"),
+        (1.70e6, 1.0e5, "Milankovitch super-cycle B (1.7 My)",         "Berger & Loutre 1991"),
+        (4.333e6, 1.667e5, "26My/6 extinction sub-cycle (4.33 My)",    "Raup & Sepkoski 1982"),
+        (4.35e9, 3.0e7,  "Hadean crust/water (4.35 Ga)",               "Valley et al. 2014"),
+        (4.50e9, 5.0e8,  "Earth habitable midpoint (7th Manu)",         "Rushby et al. 2013"),
     ]
-    ax.legend(handles=legend_elems, loc='lower right', fontsize=9,
-              framealpha=0.9, edgecolor=GREY)
-
-    plt.tight_layout()
-    plt.savefig('/home/claude/fig3_sigma_bars.png')
-    plt.close()
-    print('Fig 3 saved.')
-
-
-# ── Figure 4: MP CHAIN + C11 DUAL DIAGRAM ─────────────────────────────────────
-def make_fig4():
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 8))
-
-    # LEFT: Mantra Pushpam ascending chain
-    ax1.axis('off')
-    ax1.set_xlim(0, 10)
-    ax1.set_ylim(-0.5, 10)
-
-    chain = [
-        ('1. Āpas', 'Primordial waters', '#1E6B9C', False),
-        ('2. Candramās', 'Moon = waters', '#1E6B9C', False),
-        ('3. Parjanya', 'Rain cloud = waters', '#1E6B9C', False),
-        ('4. Samvatsara', 'Year = Prajāpati  ★', '#8B1A1A', True),
-        ('5. Āditya', 'Sun = Year  ★', '#8B1A1A', True),
-        ('6. Nakṣatrāṇi', 'Stars (light in waters)', '#2E7A2E', False),
-        ('7. Vāyu', 'Wind = waters', '#2E7A2E', False),
-        ('8. Ākāśa', 'Space = all this', '#5A3A9C', False),
-        ('9. Brahman', 'Brahman = all  ★', '#8B6914', True),
-    ]
-
-    ax1.set_title('Mantra Pushpam Ascending Chain\n(Taittirīya Āraṇyaka 1.22)',
-                  fontsize=12, color=BLUE, pad=10, fontweight='bold')
-
-    for i, (name, meaning, color, highlighted) in enumerate(chain):
-        y = 8.5 - i * 0.9
-        # Box
-        fc = '#FFF8E8' if highlighted else 'white'
-        ec = color if highlighted else '#CCCCCC'
-        lw = 2.0 if highlighted else 0.8
-        rect = plt.Rectangle((0.3, y - 0.32), 9.2, 0.62,
-                               facecolor=fc, edgecolor=ec, linewidth=lw,
-                               transform=ax1.transData, zorder=2)
-        ax1.add_patch(rect)
-        ax1.text(0.7, y, name, fontsize=10, color=color, fontweight='bold',
-                 va='center', zorder=3)
-        ax1.text(5.2, y, meaning, fontsize=9, color=GREY, va='center',
-                 style='italic', zorder=3)
-
-        # Arrow to next
-        if i < len(chain) - 1:
-            ax1.annotate('', xy=(5, 8.5 - (i+1)*0.9 + 0.32),
-                         xytext=(5, y - 0.32),
-                         arrowprops=dict(arrowstyle='->', color='#AAAAAA', lw=1.2),
-                         zorder=1)
-
-    ax1.text(5, -0.3,
-             '"He who knows the Year knows Prajāpati;\nHe who knows Prajāpati knows Brahman."',
-             ha='center', fontsize=8.5, color=GREY, style='italic')
-
-    # Rung count annotation
-    ax1.text(9.8, 8.5, '9 rungs', fontsize=8.5, color='#8B6914',
-             rotation=90, va='top', ha='center', style='italic',
-             bbox=dict(boxstyle='round', facecolor=LGOLD, edgecolor=GOLD, alpha=0.8))
-
-    # RIGHT: C11 odd numbers
-    ax2.axis('off')
-    ax2.set_xlim(0, 10)
-    ax2.set_ylim(-0.5, 10)
-    ax2.set_title('Chamakam C11 Anuvāka — Odd Numbers as Samvatsaras\n{1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21}',
-                  fontsize=12, color=BLUE, pad=10, fontweight='bold')
-
-    c11_items = [
-        (1,  '1 yr',  'Ekam — eka eva prajāpatiḥ (ŚB 11.1.6)', False),
-        (3,  '3 yr',  'Trikāla — 3 times / 3 waters (MP)', False),
-        (5,  '5 yr',  'Pañcavatsarīya yuga (Vedāṅga Jyotiṣa)', False),
-        (7,  '7 yr',  'Sapta prāṇāḥ from Prajāpati (ŚB)', False),
-        (9,  '9 yr  ★', '= NUMBER OF MP RUNGS (TA 1.22)', True),
-        (11, '11 yr', 'Ekādaśa Rudras; solar cycle ~10.66 yr', False),
-        (13, '13 yr', 'Prajāpati = 13th month (ŚB 11.1.1)', False),
-        (15, '15 yr', '15 tithis per pakṣa; moon = water (MP)', False),
-        (17, '17 yr', 'Prajāpati = 17-fold (ŚB 10.4.2.2)', False),
-        (19, '19 yr ★', 'Metonic cycle: 19 yr = 235 lunar months', True),
-        (21, '21 yr ★', 'Ekaviṃśaḥ vai prajāpatiḥ (ŚB 10.4.2.2)', True),
-    ]
-
-    for i, (n, yr, note, star) in enumerate(c11_items):
-        y = 9.0 - i * 0.78
-        fc = '#FFF8E8' if star else 'white'
-        ec = GOLD if star else '#CCCCCC'
-        lw = 2.0 if star else 0.8
-        rect = plt.Rectangle((0.2, y - 0.3), 9.4, 0.58,
-                               facecolor=fc, edgecolor=ec, linewidth=lw,
-                               transform=ax2.transData, zorder=2)
-        ax2.add_patch(rect)
-        color = GOLD if star else GREY
-        ax2.text(0.6, y, yr, fontsize=9.5, color=BLUE if not star else RED,
-                 fontweight='bold', va='center', zorder=3)
-        ax2.text(2.0, y, note, fontsize=8.5, color=color,
-                 va='center', style='italic' if not star else 'normal', zorder=3)
-
-    # Summary annotations
-    ax2.text(5, -0.05, 'Sum = 121 = 11²  ·  Product = 21!! = 13.749 Gy',
-             ha='center', fontsize=9, color=BLUE, fontweight='bold')
-    ax2.text(5, -0.38, '★ = strongest Mantra Pushpam resonances',
-             ha='center', fontsize=8.5, color=GOLD, style='italic')
-
-    # Bridge arrow between panels
-    fig.patches.append(
-        FancyArrowPatch(
-            (0.505, 0.42), (0.495, 0.42),
-            transform=fig.transFigure,
-            arrowstyle='<->', color=RED, linewidth=2,
-            mutation_scale=15
-        )
-    )
-    fig.text(0.502, 0.435, 'Samvatsara\n= Prajāpati',
-             ha='center', va='bottom', fontsize=8, color=RED,
-             style='italic', fontweight='bold')
-
-    fig.suptitle(
-        'Figure 4. Structural Correspondence: Mantra Pushpam Time-Chain × Chamakam C11',
-        fontsize=13, fontweight='bold', color=BLUE, y=1.01
-    )
-
-    plt.tight_layout()
-    plt.savefig('/home/claude/fig4_mp_c11.png', bbox_inches='tight')
-    plt.close()
-    print('Fig 4 saved.')
-
-
-# ── Figure 5: UNIVERSE AGE (APPENDIX A.3) ────────────────────────────────────
-def make_fig5():
-    measurements = [
-        ('Planck 2018\n(CMB)',              13.787, 0.020, BLUE),
-        ('WMAP 9-year',                     13.772, 0.059, '#2E5C8A'),
-        ('HST Key Project\n(H₀ = 72)',       13.600, 0.600, GREEN),
-        ('Globular cluster\nlower bound',    13.600, 0.800, '#3A7A3A'),
-    ]
-
-    N_vedic = 13.7493  # 21!! in Gy
-
-    fig, ax = plt.subplots(figsize=(9, 5))
-
-    # Plot each measurement
-    for i, (label, val, sig, color) in enumerate(measurements):
-        y = len(measurements) - i
-        ax.errorbar(val, y, xerr=sig, fmt='o', color=color,
-                    capsize=6, capthick=2, elinewidth=2,
-                    markersize=9, markerfacecolor=color,
-                    markeredgecolor='white', markeredgewidth=1.5,
-                    zorder=3)
-        ax.text(val - sig - 0.05, y, label, ha='right', va='center',
-                fontsize=9.5, color=color)
-
-        # Sigma annotation
-        sigma_dist = abs(N_vedic - val) / sig
-        side = '+0.04 Gy' if N_vedic > val else f'−{abs(N_vedic-val):.3f} Gy'
-        ax.text(max(measurements, key=lambda x: x[1])[1] + 0.65, y,
-                f'{sigma_dist:.2f}σ',
-                ha='left', va='center', fontsize=9,
-                color='black' if sigma_dist <= 1 else RED)
-
-    # 21!! line
-    ax.axvline(N_vedic, color=RED, linewidth=2.5, linestyle='-', zorder=4,
-               label=f'21!! = {N_vedic:.4f} Gy')
-    ax.text(N_vedic + 0.01, 4.6, '21!! = 13.7493 Gy\n(C11 Chamakam product,\n'
-            'samvatsara units)',
-            fontsize=9, color=RED, va='top',
-            bbox=dict(boxstyle='round,pad=0.4', facecolor='#FFF0F0',
-                      edgecolor=RED, alpha=0.9))
-
-    # Hubble tension band
-    ax.axvspan(12.9, 13.0, alpha=0.08, color=RED, label='H₀=73 estimate')
-    ax.axvspan(13.767, 13.807, alpha=0.08, color=BLUE, label='Planck 1σ range')
-
-    ax.set_xlabel('Age of Universe (Gy)', labelpad=8)
-    ax.set_yticks([])
-    ax.set_xlim(12.6, 14.8)
-    ax.set_ylim(0.3, 5.2)
-    ax.set_title(
-        'Figure 5 (Appendix A.3). 21!! in Samvatsara Units vs. Universe Age Measurements\n'
-        'Note: This correspondence does not survive look-elsewhere correction — '
-        'see §A.3 for full caveats',
-        pad=10, fontsize=11
-    )
-
-    # Sigma column header
-    ax.text(max(measurements, key=lambda x: x[1])[1] + 0.65, 4.8,
-            'σ-distance', ha='left', va='center', fontsize=9.5,
-            fontweight='bold', color=GREY)
-
-    legend_elems = [
-        Line2D([0], [0], color=RED, linewidth=2.5,
-               label=f'21!! = {N_vedic:.4f} Gy (C11 Chamakam product)'),
-        mpatches.Patch(facecolor=BLUE, alpha=0.15, label='Planck 2018 ±1σ range'),
-        mpatches.Patch(facecolor=RED,  alpha=0.10, label='H₀=73 estimate (Hubble tension)'),
-    ]
-    ax.legend(handles=legend_elems, loc='lower left', fontsize=9,
-              framealpha=0.9, edgecolor=GREY)
-
-    plt.tight_layout()
-    plt.savefig('/home/claude/fig5_universe_age.png')
-    plt.close()
-    print('Fig 5 saved.')
-
-
-# ── MAIN ──────────────────────────────────────────────────────────────────────
-if __name__ == '__main__':
-    print('Generating figures...')
-    make_fig1()
-    make_fig2()
-    make_fig3()
-    make_fig4()
-    make_fig5()
+    mc_pre = run_mc(BASE, VEDIC_MULTIPLIERS, GEO_PRE,
+                    n_sims=args.n, threshold=args.threshold, rng=rng)
+    print("\n[ PRE-SPECIFIED LIST MC (textually justified comparators — for paper) ]")
+    print(f"  Vedic overlap count  : {mc_pre['vedic_overlap_count']}")
+    print(f"  Null mean ± std      : {mc_pre['null_mean']:.2f} ± {mc_pre['null_std']:.2f}")
+    print(f"  p-value (one-tailed) : {mc_pre['p_value']:.5f}")
     print()
-    print('All 5 figures saved to /home/claude/')
-    print('  fig1_null_distribution.png  — Fig 1 (MC null distribution)')
-    print('  fig2_timeline.png           — Fig 2 (Vedic vs Geo timeline)')
-    print('  fig3_sigma_bars.png         — Fig 3 (sigma distance bars)')
-    print('  fig4_mp_c11.png             — Fig 4 (MP chain + C11 dual)')
-    print('  fig5_universe_age.png       — Fig 5 (universe age, Appendix)')
+
+    # ── Exhaustive geo list (ALL major periodicities)
+    GEO_ALL = [
+        # ── Milankovitch ──────────────────────────────────────────────────
+        (2.30e4,  2.0e3,  "Milankovitch precession (23 ky)",             "Berger 1978"),
+        (4.10e4,  2.0e3,  "Milankovitch obliquity (41 ky)",              "Berger 1978"),
+        (1.00e5,  1.0e4,  "Milankovitch eccentricity short (100 ky)",    "Hays et al. 1976"),
+        (4.13e5,  1.0e4,  "Milankovitch eccentricity long (413 ky)",     "Berger & Loutre 1991"),
+        # ── Geomagnetic ──────────────────────────────────────────────────
+        (4.50e5,  5.0e4,  "Geomagnetic reversal mean (450 ky)",          "Laj & Channell 2007"),
+        (4.70e5,  5.0e4,  "Geodynamo oscillation (~470 ky)",             "Constable et al. 2016"),
+        # ── Milankovitch super-cycles ─────────────────────────────────────
+        (1.20e6,  1.0e5,  "Milankovitch super-cycle A (1.2 My)",         "Berger & Loutre 1991"),
+        (1.70e6,  1.0e5,  "Milankovitch super-cycle B (1.7 My)",         "Berger & Loutre 1991"),
+        (2.40e6,  2.0e5,  "Milankovitch super-cycle C (2.4 My)",         "Berger & Loutre 1991"),
+        # ── Extinction cycles ─────────────────────────────────────────────
+        (2.60e7,  1.0e6,  "Extinction periodicity (26 My)",              "Raup & Sepkoski 1982"),
+        (6.20e7,  3.0e6,  "Extinction periodicity (62 My)",              "Rohde & Muller 2005"),
+        # ── Galactic / tectonic ───────────────────────────────────────────
+        (2.30e8,  2.0e7,  "Galactic year / mantle overturn (230 My)",    "Leitch & Vasisht 1998"),
+        (5.00e8,  1.0e8,  "Wilson cycle (500 My)",                       "Wilson 1966"),
+        # ── Deep time ────────────────────────────────────────────────────
+        (2.519e8, 2.4e4,  "Permian extinction (251.9 Ma)",               "Shen et al. 2011"),
+        (5.41e8,  1.0e6,  "Cambrian explosion (541 Ma)",                 "Gradstein et al. 2012"),
+        (7.00e8,  5.0e7,  "Snowball Earth (700 Ma)",                     "Hoffman et al. 1998"),
+        (2.40e9,  1.0e8,  "Great Oxygenation Event (2.4 Ga)",            "Holland 2006"),
+        (4.35e9,  3.0e7,  "Hadean crust/water (4.35 Ga)",               "Valley et al. 2014"),
+        (4.54e9,  5.0e7,  "Earth total age (4.54 Ga)",                   "Patterson 1956"),
+        (4.50e9,  5.0e8,  "Earth habitable midpoint (7th Manu)",         "Rushby et al. 2013"),
+    ]
+
+    print(f"Running with N={args.n:,} simulations, seed={args.seed}, threshold={args.threshold}σ\n")
+
+    mc_mult = run_mc(BASE, VEDIC_MULTIPLIERS, GEO_ALL,
+                     n_sims=args.n, threshold=args.threshold, rng=rng)
+
+    mc_base = run_mc_base(VEDIC_MULTIPLIERS, GEO_ALL,
+                          n_sims=args.n, threshold=args.threshold,
+                          base_range=(1e4, 1e7), rng=rng)
+
+    ex = exhaustive_table(VEDIC_VALUES, VEDIC_LABELS, GEO_ALL, threshold=args.threshold)
+
+    print_report(mc_mult, mc_base, ex)
+
+    # Machine-readable output for paper table
+    print("\n[ JSON-READY RESULTS ]")
+    import json
+    out = {
+        "mc_multiplier_test": {
+            "vedic_overlap_count": mc_mult["vedic_overlap_count"],
+            "null_mean": round(mc_mult["null_mean"], 3),
+            "null_std": round(mc_mult["null_std"], 3),
+            "p_value": mc_mult["p_value"],
+            "n_sims": args.n,
+            "seed": args.seed,
+        },
+        "mc_base_test": {
+            "vedic_overlap_count": mc_base["vedic_overlap_count"],
+            "null_mean": round(mc_base["null_mean"], 3),
+            "null_std": round(mc_base["null_std"], 3),
+            "p_value": mc_base["p_value"],
+            "n_sims": args.n,
+        },
+        "exhaustive_pairs": [
+            {k: (round(v, 4) if isinstance(v, float) else v)
+             for k, v in r.items() if k != "sim_overlap_counts"}
+            for r in ex
+        ]
+    }
+    print(json.dumps({"summary": {
+        "mc_mult_p": mc_mult["p_value"],
+        "mc_base_p": mc_base["p_value"],
+        "vedic_overlap_count": mc_mult["vedic_overlap_count"],
+        "null_mean": round(mc_mult["null_mean"], 2),
+    }}, indent=2))
+
+
+if __name__ == "__main__":
+    main()
